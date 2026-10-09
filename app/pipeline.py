@@ -162,7 +162,20 @@ def run_pipeline(
         if picked is not None:
             matched, llm_suggestions = picked
         else:
-            matched = filter_articles(in_range, tags)  # offline fallback
+            # The model could not be asked (provider refusal, e.g. GigaChat
+            # moderation on war/politics batches, or a network error).
+            # Keyword matching is only a rough approximation — when it finds
+            # nothing, hand everything inside the time range to the digest
+            # model itself instead of claiming "nothing matched": it either
+            # writes the digest, honestly says there is no such news, or
+            # shows the provider's refusal.
+            matched = filter_articles(in_range, tags)
+            if not matched:
+                matched = list(in_range)
+                warnings.append(
+                    "AI selection unavailable — the digest model reviewed "
+                    "everything inside the time range itself"
+                )
 
     # Which source actually feeds the model (not just how many are configured)
     used = matched or in_range or articles

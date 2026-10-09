@@ -226,9 +226,31 @@ field2.on_submit(None)
 assert captured_cfg.get("question") == "Что происходит в ИИ?", captured_cfg
 assert captured_cfg["tags"] == "", captured_cfg
 
+# generation options from the composer widgets must reach the pipeline
+length_dd = [
+    n for n in nodes2
+    if isinstance(n, ft.Dropdown)
+    and n.options and getattr(n.options[0], "key", None) == "short"
+]
+assert length_dd, "length dropdown expected"
+style_f = [
+    n for n in nodes2
+    if isinstance(n, ft.TextField)
+    and (n.hint_text or "").startswith("e.g. in bullet points")
+]
+assert style_f, "style field expected"
+length_dd[0].value = "detailed"
+style_f[0].value = "focus on economics"
+field2.value = "ещё одна тема"
+field2.on_submit(None)
+assert captured_cfg["gen_length"] == "detailed", captured_cfg
+assert captured_cfg["gen_style"] == "focus on economics", captured_cfg
+assert "gen_temperature" in captured_cfg, captured_cfg
+print("generation options OK:", captured_cfg["gen_length"], "/", captured_cfg["gen_style"])
+
 # 4) history: reopen a saved chat ------------------------------------------
 loaded2 = chat_store.load_chats()
-assert len(loaded2) == 1 and len(loaded2[0]["messages"]) == 8, (
+assert len(loaded2) == 1 and len(loaded2[0]["messages"]) == 10, (
     len(loaded2),
     len(loaded2[0]["messages"]) if loaded2 else 0,
 )
@@ -256,7 +278,7 @@ assert history_items, "history entry expected in the sidebar"
 history_items[0].on_click(None)  # reopen the saved chat
 nodes2 = list(walk(page2.controls))
 mds2 = [n for n in nodes2 if isinstance(n, ft.Markdown)]
-assert len(mds2) == 4, f"reopened thread must show every answer, got {len(mds2)}"
+assert len(mds2) == 5, f"reopened thread must show every answer, got {len(mds2)}"
 labels2 = [str(c.label) for c in nodes2 if isinstance(c, ft.Chip)]
 assert "рынок" in labels2, labels2
 print("history reopen OK")

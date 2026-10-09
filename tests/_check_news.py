@@ -48,6 +48,31 @@ ordered = scraper._sort_newest(mixed)
 assert [a.url for a in ordered] == ["u3", "u1", "u2"], [a.url for a in ordered]
 print("sort OK")
 
+# telegram: a video-duration <time> marker must not shadow the publish date
+tg_html = """
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message">
+<div class="tgme_widget_message_bubble">
+<div class="tgme_widget_message_video js-message_video">
+<time class="message_video_duration js-message_video_duration">0:15</time>
+</div>
+<div class="tgme_widget_message_text js-message_text">Длинный пост про новости: цена топлива
+выросла, эксперты обсуждают последствия для всего рынка.</div>
+<a class="tgme_widget_message_date" href="https://t.me/ndnews24/123">
+<time datetime="2026-10-09T08:42:46+00:00" class="time">08:42</time>
+</a></div></div></div>"""
+from bs4 import BeautifulSoup as _Soup  # noqa: E402
+
+_msg = _Soup(tg_html, "lxml").select_one("div.tgme_widget_message")
+_tg = scraper._telegram_message(_msg, "https://t.me/s/ndnews24", "ndnews24")
+assert _tg is not None
+assert _tg.published == "2026-10-09T08:42:46+00:00", _tg.published
+assert _tg.url == "https://t.me/ndnews24/123"
+assert _tg.source == "t.me/ndnews24"
+assert len(_tg.title) <= 91 and _tg.text.startswith("Длинный пост")
+# the old generic selector grabbed the duration marker and lost the date
+assert _msg.select_one("time").get("datetime", "") == ""
+print("telegram date OK:", _tg.published)
+
 # JSON-LD
 from bs4 import BeautifulSoup  # noqa: E402
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
@@ -142,7 +143,17 @@ def _pass_login_wall(resp: requests.Response) -> requests.Response:
 
 
 def _get(url: str) -> requests.Response:
-    resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+    last: requests.RequestException | None = None
+    for attempt in range(3):  # brief backoff: sites like t.me reset rapid
+        try:  # consecutive connections (ConnectionError/Timeout only)
+            resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+            break
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            last = exc
+            if attempt < 2:
+                _time.sleep(1.5 * (attempt + 1))
+    else:
+        raise last  # type: ignore[misc]
     resp.raise_for_status()
     resp = _fix_encoding(resp)
     resp = _pass_login_wall(resp)
@@ -827,6 +838,35 @@ def fetch_site(raw_url: str) -> list[Article]:
 # Telegram channels (public preview site t.me/s/channel - no Bot API needed)
 # --------------------------------------------------------------------------- #
 
+def _telegram_message(msg, page_url: str, channel: str) -> Article | None:
+    """One t.me/s preview message -> Article, or None if not a text post.
+
+    The publish date is read from the date anchor only: video posts carry a
+    ``<time class="message_video_duration">`` marker WITHOUT a datetime
+    attribute, and it sits in the DOM before the real date.
+    """
+    text_el = msg.select_one("div.tgme_widget_message_text")
+    if text_el is None:
+        return None  # skip photo/service messages
+    text = re.sub(r"\s+", " ", text_el.get_text(" ", strip=True)).strip()
+    if len(text) < 15:
+        return None
+    time_el = msg.select_one("a.tgme_widget_message_date time")
+    if time_el is None:
+        time_el = msg.select_one("time[datetime]")
+    published = time_el.get("datetime", "") if time_el is not None else ""
+    link_el = msg.select_one("a.tgme_widget_message_date")
+    msg_url = link_el.get("href", page_url) if link_el is not None else page_url
+    title = text if len(text) <= 90 else text[:90].rstrip() + "…"
+    return Article(
+        source=f"t.me/{channel}",
+        url=msg_url,
+        title=title,
+        text=text,
+        published=published,
+    )
+
+
 def fetch_telegram(raw: str) -> list[Article]:
     channel = telegram_channel(raw)
     if not channel:
@@ -842,26 +882,9 @@ def fetch_telegram(raw: str) -> list[Article]:
     soup = BeautifulSoup(resp.text, "lxml")
     items: list[Article] = []
     for msg in soup.select("div.tgme_widget_message"):
-        text_el = msg.select_one("div.tgme_widget_message_text")
-        if text_el is None:
-            continue  # skip photo/service messages
-        text = re.sub(r"\s+", " ", text_el.get_text(" ", strip=True)).strip()
-        if len(text) < 15:
-            continue
-        time_el = msg.select_one("time")
-        published = time_el.get("datetime", "") if time_el is not None else ""
-        link_el = msg.select_one("a.tgme_widget_message_date")
-        msg_url = link_el.get("href", url) if link_el is not None else url
-        title = text if len(text) <= 90 else text[:90].rstrip() + "…"
-        items.append(
-            Article(
-                source=f"t.me/{channel}",
-                url=msg_url,
-                title=title,
-                text=text,
-                published=published,
-            )
-        )
+        article = _telegram_message(msg, url, channel)
+        if article is not None:
+            items.append(article)
         if len(items) >= MAX_ARTICLES_PER_SOURCE:
             break
 

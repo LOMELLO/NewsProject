@@ -59,6 +59,25 @@ _SELECT_SYSTEM = (
     "an empty suggestions list."
 )
 
+# GigaChat's server-side content moderation answers with boilerplate instead
+# of doing the task (typical for war/politics news batches). It arrives as a
+# normal 200-response, so it must be recognized explicitly — otherwise it is
+# displayed as if it were the digest. GigaChat uses several variants of the
+# wording ("не обладает собственным мнением" vs "не обладают собственным
+# мнением — их ответы являются обобщением…"), hence patterns, not substrings.
+_MODERATION_PATTERNS = (
+    r"не обладае\w* собственным мнением",
+    r"разговоры на \w+ темы[^.]{0,40}огранич",
+    r"ответ сгенерирован нейросетевой моделью",
+    r"обобщением информации, находящейся в открытом доступе",
+    r"во избежание неправильного толкования",
+)
+
+
+def _is_moderation_refusal(reply: str) -> bool:
+    low = (reply or "").lower()
+    return any(re.search(pattern, low) for pattern in _MODERATION_PATTERNS)
+
 
 def _selection_prompt(articles: list[Article], tags: list[str], question: str) -> str:
     request = question or ("Topic: " + ", ".join(tags))
@@ -270,6 +289,12 @@ class UniversalProvider:
         ).strip()
         if not result:
             raise AIProviderError(f"{self.title}: the model returned an empty reply")
+        if _is_moderation_refusal(result):
+            raise AIProviderError(
+                f"{self.title}: the provider refused this batch of news "
+                "(server-side content moderation). Try a different time "
+                "range, other sources, or another API profile."
+            )
         return result
 
     def select_articles(

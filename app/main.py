@@ -1324,6 +1324,11 @@ def main(page: ft.Page) -> None:
             "time_range": time_dd.value or DEFAULT_TIME_RANGE,
             "tags": "" if ask else raw,
             "question": ask,
+            # generation options live in widgets, not in settings.json —
+            # pass them explicitly, the pipeline must not fall back to defaults
+            "gen_temperature": state.get("gen_temperature", 0.4),
+            "gen_length": length_dd.value or "medium",
+            "gen_style": (style_field.value or "").strip(),
         }
         cfg.update(config.profile_to_settings(active))
         _run(lambda: worker(cfg, parts, chat["id"]))
