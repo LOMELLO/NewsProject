@@ -1,0 +1,9 @@
+.env
+settings.json
+chats.json
+DEVELOPMENT.md
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.vscode/
