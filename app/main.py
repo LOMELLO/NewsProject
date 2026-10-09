@@ -25,7 +25,7 @@ import flet as ft
 
 from app import chat_store, config
 from app.ai_providers import AIProviderError, get_provider
-from app.filters import DEFAULT_TIME_RANGE, TIME_RANGES
+from app.filters import DEFAULT_TIME_RANGE, TIME_RANGES, resolve_time_range
 from app.pipeline import PipelineError, run_pipeline
 from app.prompts import LENGTH_PRESETS
 from app.window_title import apply_title_bar_theme
@@ -222,9 +222,7 @@ def main(page: ft.Page) -> None:
         return handler
 
     # --------------------------- sidebar inputs --------------------------- #
-    _time_range = settings.get("time_range") or DEFAULT_TIME_RANGE
-    if _time_range not in TIME_RANGES:
-        _time_range = DEFAULT_TIME_RANGE
+    _time_range = resolve_time_range(settings.get("time_range") or DEFAULT_TIME_RANGE)
 
     sources_field = _field(
         value=settings["sources"],

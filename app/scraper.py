@@ -24,8 +24,11 @@ HEADERS = {
     "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
 }
 TIMEOUT = 20
-MAX_ARTICLES_PER_SOURCE = 10
+MAX_ARTICLES_PER_SOURCE = 40  # hard per-source cap: fetch everything available, bounded
 MAX_TEXT_LEN = 1500
+
+# One t.me/s preview page holds ~15-20 messages; bound pagination requests.
+_TELEGRAM_MAX_PAGES = 6
 
 # Feed URLs tried when the page does not advertise one (at most 3 requests).
 FEED_CANDIDATES = ("/rss", "/feed", "/rss.xml", "/atom.xml", "/index.xml")
@@ -142,6 +145,36 @@ def _pass_login_wall(resp: requests.Response) -> requests.Response:
     return latest
 
 
+def _curl_get(url: str, cause: requests.RequestException) -> requests.Response:
+    """Fallback for resets aimed at the plain-python TLS fingerprint.
+
+    t.me resets handshakes from requests/urllib3 while a browser on the
+    same IP works fine — the block follows the client fingerprint, not the
+    address, so waiting does not help. curl_cffi impersonates a real Chrome
+    client (TLS hello + HTTP/2). Optional dependency: when it is missing
+    the original connection error propagates unchanged.
+    """
+    try:
+        from curl_cffi import requests as curl_requests
+        from requests.structures import CaseInsensitiveDict
+        from requests.utils import get_encoding_from_headers
+    except ImportError:
+        raise cause
+    try:
+        raw = curl_requests.get(
+            url, headers=HEADERS, timeout=TIMEOUT, impersonate="chrome"
+        )
+    except Exception:  # noqa: BLE001 - the connection error explains more
+        raise cause
+    resp = requests.Response()
+    resp.status_code = raw.status_code
+    resp._content = raw.content  # noqa: SLF001 - populate the requests response
+    resp.url = getattr(raw, "url", "") or url
+    resp.headers = CaseInsensitiveDict(dict(raw.headers.items()))
+    resp.encoding = get_encoding_from_headers(resp.headers)
+    return resp
+
+
 def _get(url: str) -> requests.Response:
     last: requests.RequestException | None = None
     for attempt in range(3):  # brief backoff: sites like t.me reset rapid
@@ -153,7 +186,7 @@ def _get(url: str) -> requests.Response:
             if attempt < 2:
                 _time.sleep(1.5 * (attempt + 1))
     else:
-        raise last  # type: ignore[misc]
+        resp = _curl_get(url, last)  # type: ignore[arg-type]
     resp.raise_for_status()
     resp = _fix_encoding(resp)
     resp = _pass_login_wall(resp)
@@ -868,25 +901,58 @@ def _telegram_message(msg, page_url: str, channel: str) -> Article | None:
 
 
 def fetch_telegram(raw: str) -> list[Article]:
+    """The channel's posts, paginating t.me/s backwards (``?before=<id>``).
+
+    One preview page holds ~15-20 messages, so the per-source cap needs
+    several pages; stops early on the cap, on a page that adds nothing, or
+    after ``_TELEGRAM_MAX_PAGES`` requests (a partial fetch beats an error).
+    """
     channel = telegram_channel(raw)
     if not channel:
         raise ScraperError("could not detect the Telegram channel name")
-    url = f"https://t.me/s/{channel}"
-    try:
-        resp = _get(url)
-    except requests.RequestException as exc:
-        raise ScraperError(
-            f"failed to download the channel ({exc.__class__.__name__})"
-        ) from exc
+    page_url = f"https://t.me/s/{channel}"
 
-    soup = BeautifulSoup(resp.text, "lxml")
     items: list[Article] = []
-    for msg in soup.select("div.tgme_widget_message"):
-        article = _telegram_message(msg, url, channel)
-        if article is not None:
+    seen: set[str] = set()
+    before: int | None = None
+    for _page in range(_TELEGRAM_MAX_PAGES):
+        if _page:
+            _time.sleep(0.8)  # t.me throttles rapid consecutive requests
+        url = page_url + (f"?before={before}" if before is not None else "")
+        try:
+            resp = _get(url)
+        except requests.RequestException as exc:
+            if items:
+                break  # older pages are optional
+            raise ScraperError(
+                f"failed to download the channel ({exc.__class__.__name__})"
+            ) from exc
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        added = 0
+        earliest: int | None = None
+        for msg in soup.select("div.tgme_widget_message"):
+            article = _telegram_message(msg, page_url, channel)
+            if article is None:
+                continue
+            match = re.search(r"/(\d+)$", article.url or "")
+            if match:
+                msg_id = int(match.group(1))
+                earliest = msg_id if earliest is None else min(earliest, msg_id)
+            if article.url in seen:
+                continue
+            seen.add(article.url)
             items.append(article)
+            added += 1
+            if len(items) >= MAX_ARTICLES_PER_SOURCE:
+                break
         if len(items) >= MAX_ARTICLES_PER_SOURCE:
             break
+        if added == 0 or earliest is None:
+            break  # nothing new (channel is shorter than the cap)
+        if before is not None and earliest >= before:
+            break  # pagination did not move backwards
+        before = earliest
 
     if not items:
         raise ScraperError(

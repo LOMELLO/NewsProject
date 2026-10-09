@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .ai_providers import AIProviderError, get_provider
-from .filters import TIME_RANGES, DEFAULT_TIME_RANGE, filter_articles, filter_by_time, parse_tags
+from .filters import TIME_RANGES, DEFAULT_TIME_RANGE, filter_articles, filter_by_time, parse_tags, resolve_time_range
 from .prompts import attach_links, select_for_prompt
 from .scraper import collect_sources, parse_sources
 from .topics import suggest_topics
@@ -29,7 +29,8 @@ _RU_RANGES = {
     "24h": "за последние 24 часа",
     "3d": "за последние 3 дня",
     "7d": "за последние 7 дней",
-    "all": "за всё время",
+    "30d": "за последние 30 дней",
+    "max": "за максимум контекста",
 }
 
 
@@ -124,7 +125,7 @@ def run_pipeline(
         raise PipelineError("Add at least one source in the left panel")
 
     tags = parse_tags(settings.get("tags", ""))
-    time_range = settings.get("time_range") or DEFAULT_TIME_RANGE
+    time_range = resolve_time_range(settings.get("time_range") or DEFAULT_TIME_RANGE)
     range_label = TIME_RANGES.get(time_range, TIME_RANGES[DEFAULT_TIME_RANGE])[0]
     warnings: list[str] = []
 
@@ -143,9 +144,10 @@ def run_pipeline(
     on_status("Filtering...")
     on_progress(0.55)
     in_range, undated = filter_by_time(articles, time_range)
-    if undated and time_range != "all":
+    if undated and time_range != "max":
         warnings.append(
-            f"{undated} item(s) skipped: no publish date (select 'All time' to include)"
+            f"{undated} item(s) skipped: no publish date "
+            "(select 'Maximum context' to include)"
         )
 
     question = str(settings.get("question") or "").strip()

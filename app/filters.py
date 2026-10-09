@@ -9,14 +9,24 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # annotations only: scraper imports this module back
     from .scraper import Article
 
-# key -> (label shown in UI, timedelta or None for "all time")
+# key -> (label shown in UI, timedelta or None for "no time bound")
 TIME_RANGES: dict[str, tuple[str, timedelta | None]] = {
     "24h": ("Last 24 hours", timedelta(hours=24)),
     "3d": ("Last 3 days", timedelta(days=3)),
     "7d": ("Last 7 days", timedelta(days=7)),
-    "all": ("All time", None),
+    "30d": ("Last 30 days", timedelta(days=30)),
+    # no date cutoff: everything fetched within the per-source limits,
+    # bounded by the prompt budget — "as much context as the model can take"
+    "max": ("Maximum context", None),
 }
 DEFAULT_TIME_RANGE = "3d"
+_LEGACY_RANGES = {"all": "max"}  # the removed "All time" key
+
+
+def resolve_time_range(time_range: str) -> str:
+    """Normalize a range key (legacy 'all' -> 'max', unknown -> default)."""
+    key = _LEGACY_RANGES.get(time_range, time_range)
+    return key if key in TIME_RANGES else DEFAULT_TIME_RANGE
 
 
 def normalize(text: str) -> str:
@@ -107,9 +117,9 @@ def filter_by_time(
     """Keep articles published within the selected range.
 
     Returns (kept, undated_count). Undated items are skipped when a range is
-    active (so the filter cannot silently lie) and kept for 'all'.
+    active (so the filter cannot silently lie) and kept for 'max'.
     """
-    delta = TIME_RANGES.get(time_range, TIME_RANGES[DEFAULT_TIME_RANGE])[1]
+    delta = TIME_RANGES[resolve_time_range(time_range)][1]
     if delta is None:
         return list(articles), 0
 

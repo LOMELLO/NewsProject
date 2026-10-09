@@ -48,6 +48,28 @@ ordered = scraper._sort_newest(mixed)
 assert [a.url for a in ordered] == ["u3", "u1", "u2"], [a.url for a in ordered]
 print("sort OK")
 
+# time ranges: +30d and 'Maximum context', legacy 'all' mapped, no 'All time'
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz  # noqa: E402
+
+from app.filters import TIME_RANGES, filter_by_time, resolve_time_range  # noqa: E402
+
+assert "30d" in TIME_RANGES and "max" in TIME_RANGES
+assert "all" not in TIME_RANGES, "the 'All time' option was removed"
+assert TIME_RANGES["max"][1] is None, "'max' must not filter by date"
+assert resolve_time_range("all") == "max", "legacy settings.json key"
+assert resolve_time_range("nonsense") == "3d", "unknown key -> default"
+_now = _dt.now(_tz.utc)
+fresh = scraper.Article("s", "f1", "fresh", published=(_now - _td(days=2)).isoformat())
+stale = scraper.Article("s", "o1", "stale", published=(_now - _td(days=90)).isoformat())
+undated = scraper.Article("s", "d1", "no date")
+kept, und = filter_by_time([fresh, stale, undated], "30d")
+assert [a.url for a in kept] == ["f1"] and und == 1, (kept, und)
+kept, und = filter_by_time([fresh, stale, undated], "max")
+assert len(kept) == 3 and und == 0, "max keeps everything incl. undated"
+kept, _ = filter_by_time([fresh, stale, undated], "all")
+assert len(kept) == 3, "legacy 'all' behaves like 'max'"
+print("time ranges OK:", "/".join(TIME_RANGES), "| legacy all ->", resolve_time_range("all"))
+
 # telegram: a video-duration <time> marker must not shadow the publish date
 tg_html = """
 <div class="tgme_widget_message_wrap"><div class="tgme_widget_message">

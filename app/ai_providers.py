@@ -311,7 +311,7 @@ class UniversalProvider:
         network error, a reply we cannot parse) so the caller can fall back
         to plain keyword filtering.
         """
-        pool = list(articles)[:40]
+        pool = list(articles)[:80]  # generous: selection sees the whole feed
         if not pool:
             return [], []
         try:
